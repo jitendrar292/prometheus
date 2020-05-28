@@ -24,3 +24,4 @@ npm_licenses.tar.bz2
 
 .idea
 /web/ui/data
+bin/
