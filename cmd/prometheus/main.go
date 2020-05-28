@@ -17,7 +17,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/prometheus/prometheus/util/teststorage"
+	"gopkg.in/yaml.v2"
 	"io"
+	"io/ioutil"
 	"math"
 	"net"
 	"net/http"
@@ -343,7 +346,7 @@ func main() {
 	var (
 		localStorage  = &readyStorage{}
 		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), prometheus.DefaultRegisterer, localStorage.StartTime, cfg.localStoragePath, time.Duration(cfg.RemoteFlushDeadline))
-		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
+		fanoutStorage = storage.NewFanout(logger, localStorage)
 	)
 
 	var (
@@ -671,7 +674,6 @@ func main() {
 	}
 	{
 		// TSDB.
-		opts := cfg.tsdb.ToTSDBOptions()
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -681,31 +683,8 @@ func main() {
 						return errors.New("flag 'storage.tsdb.wal-segment-size' must be set between 10MB and 256MB")
 					}
 				}
-				db, err := openDBWithMetrics(
-					cfg.localStoragePath,
-					logger,
-					prometheus.DefaultRegisterer,
-					&opts,
-				)
-				if err != nil {
-					return errors.Wrapf(err, "opening storage failed")
-				}
 
-				level.Info(logger).Log("fs_type", prom_runtime.Statfs(cfg.localStoragePath))
-				level.Info(logger).Log("msg", "TSDB started")
-				level.Debug(logger).Log("msg", "TSDB options",
-					"MinBlockDuration", cfg.tsdb.MinBlockDuration,
-					"MaxBlockDuration", cfg.tsdb.MaxBlockDuration,
-					"MaxBytes", cfg.tsdb.MaxBytes,
-					"NoLockfile", cfg.tsdb.NoLockfile,
-					"RetentionDuration", cfg.tsdb.RetentionDuration,
-					"WALSegmentSize", cfg.tsdb.WALSegmentSize,
-					"AllowOverlappingBlocks", cfg.tsdb.AllowOverlappingBlocks,
-					"WALCompression", cfg.tsdb.WALCompression,
-				)
-
-				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
-				localStorage.Set(db, startTimeMargin)
+				initLocalStorage(localStorage)
 				close(dbOpen)
 				<-cancel
 				return nil
@@ -761,6 +740,58 @@ func main() {
 	level.Info(logger).Log("msg", "See you next time!")
 }
 
+func initLocalStorage(localStorage *readyStorage) {
+	startTimeMargin := int64(2 * 10 * 1000)
+
+	// ## LOAD FROM FILE ##
+	err, inProcStorage := loadDataFromFile()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "could not load sample data"))
+		os.Exit(2)
+	}
+
+	if localStorage.get() != nil {
+		localStorage.get().Close()
+	}
+	localStorage.Set(inProcStorage.DB, startTimeMargin)
+}
+
+func loadDataFromFile() (error, *teststorage.TestStorage) {
+	filename := "c:\\d\\input_series.yml"
+	b, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return err, nil
+	}
+
+	var sample sampleSeries
+	if err := yaml.UnmarshalStrict(b, &sample); err != nil {
+		return err, nil
+	}
+
+	var maxSeriesLength float64 = 0
+	for _, is := range sample.InputSeries {
+		maxSeriesLength = math.Max(maxSeriesLength, float64(len(strings.Split(is.Values, " "))))
+	}
+	promql.SetTime(time.Now().Add(time.Duration(-maxSeriesLength) * time.Minute).UTC())
+
+	lazyLoader, err := promql.NewLazyLoader(nil, sample.seriesLoadingString())
+	if err != nil {
+		return err, nil
+	}
+	var errs []error
+	lazyLoader.WithSamplesTill(time.Now(), func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	})
+	if len(errs) > 0 {
+		return errs[0], nil
+	}
+
+	inProcStorage := lazyLoader.Storage().(*teststorage.TestStorage)
+	return nil, inProcStorage
+}
+
 func openDBWithMetrics(dir string, logger log.Logger, reg prometheus.Registerer, opts *tsdb.Options) (*tsdb.DB, error) {
 	db, err := tsdb.Open(
 		dir,
@@ -806,11 +837,7 @@ func reloadConfig(filename string, logger log.Logger, rls ...func(*config.Config
 			configSuccess.Set(0)
 		}
 	}()
-
-	conf, err := config.LoadFile(filename)
-	if err != nil {
-		return errors.Wrapf(err, "couldn't load configuration (--config.file=%q)", filename)
-	}
+	conf := &config.DefaultConfig
 
 	failed := false
 	for _, rl := range rls {
@@ -826,6 +853,36 @@ func reloadConfig(filename string, logger log.Logger, rls ...func(*config.Config
 	promql.SetDefaultEvaluationInterval(time.Duration(conf.GlobalConfig.EvaluationInterval))
 	level.Info(logger).Log("msg", "Completed loading of configuration file", "filename", filename)
 	return nil
+}
+
+type series struct {
+	Series string `yaml:"series"`
+	Values string `yaml:"values"`
+}
+
+type sampleSeries struct {
+	Interval    time.Duration `yaml:"interval"`
+	InputSeries []series      `yaml:"input_series"`
+}
+
+func (sample *sampleSeries) seriesLoadingString() string {
+	result := ""
+	result += "load " + shortDuration(sample.Interval) + "\n"
+	for _, is := range sample.InputSeries {
+		result += "  " + is.Series + " " + is.Values + "\n"
+	}
+	return result
+}
+
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = s[:len(s)-2]
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = s[:len(s)-2]
+	}
+	return s
 }
 
 func startsOrEndsWithQuote(s string) bool {
