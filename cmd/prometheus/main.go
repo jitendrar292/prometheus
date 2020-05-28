@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/prometheus/prometheus/util/teststorage"
+	"gopkg.in/fsnotify/fsnotify.v1"
 	"gopkg.in/yaml.v2"
 	"io"
 	"io/ioutil"
@@ -39,7 +40,7 @@ import (
 	"github.com/alecthomas/units"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	conntrack "github.com/mwitkow/go-conntrack"
+	"github.com/mwitkow/go-conntrack"
 	"github.com/oklog/run"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
@@ -49,7 +50,7 @@ import (
 	"github.com/prometheus/common/version"
 	jcfg "github.com/uber/jaeger-client-go/config"
 	jprom "github.com/uber/jaeger-lib/metrics/prometheus"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"gopkg.in/alecthomas/kingpin.v2"
 	"k8s.io/klog"
 
 	promlogflag "github.com/prometheus/common/promlog/flag"
@@ -105,9 +106,9 @@ func main() {
 		oldFlagRetentionDuration model.Duration
 		newFlagRetentionDuration model.Duration
 	)
-
 	cfg := struct {
 		configFile string
+		sampleFile string
 
 		localStoragePath    string
 		notifier            notifier.Options
@@ -147,6 +148,9 @@ func main() {
 
 	a.Flag("config.file", "Prometheus configuration file path.").
 		Default("prometheus.yml").StringVar(&cfg.configFile)
+
+	a.Flag("sample.file", "The file containing sample data").
+		Required().PlaceHolder("<fpath>").StringVar(&cfg.sampleFile)
 
 	a.Flag("web.listen-address", "Address to listen on for UI, API, and telemetry.").
 		Default("0.0.0.0:9090").StringVar(&cfg.web.ListenAddress)
@@ -684,7 +688,7 @@ func main() {
 					}
 				}
 
-				initLocalStorage(localStorage)
+				initLocalStorage(cfg.sampleFile, localStorage)
 				close(dbOpen)
 				<-cancel
 				return nil
@@ -694,6 +698,45 @@ func main() {
 					level.Error(logger).Log("msg", "Error stopping storage", "err", err)
 				}
 				close(cancel)
+			},
+		)
+	}
+	var watcher *fsnotify.Watcher
+	var lastUpdate time.Time
+	stopWatcher := make(chan bool)
+	{
+		g.Add(
+			func() error {
+				watcher, err = fsnotify.NewWatcher()
+				if err != nil {
+					return err
+				}
+				if err := watcher.Add(cfg.sampleFile); err != nil {
+					return err
+				}
+
+				go func() {
+					for {
+						select {
+						case <-watcher.Events:
+							if lastUpdate.IsZero() || time.Now().Sub(lastUpdate) > 1*time.Second {
+								lastUpdate = time.Now()
+								fmt.Printf("File updated %s\n", cfg.sampleFile)
+								initLocalStorage(cfg.sampleFile, localStorage)
+							}
+						case err := <-watcher.Errors:
+							fmt.Println("ERROR", err)
+						case <-stopWatcher:
+							return
+						}
+					}
+				}()
+				<-stopWatcher
+				return nil
+			},
+			func(err error) {
+				stopWatcher <- true
+				watcher.Close()
 			},
 		)
 	}
@@ -733,6 +776,7 @@ func main() {
 			},
 		)
 	}
+
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
@@ -740,25 +784,26 @@ func main() {
 	level.Info(logger).Log("msg", "See you next time!")
 }
 
-func initLocalStorage(localStorage *readyStorage) {
-	startTimeMargin := int64(2 * 10 * 1000)
-
+func initLocalStorage(filePath string, localStorage *readyStorage) {
 	// ## LOAD FROM FILE ##
-	err, inProcStorage := loadDataFromFile()
+	err, inProcStorage := loadDataFromFile(filePath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "could not load sample data"))
-		os.Exit(2)
+		return
 	}
 
 	if localStorage.get() != nil {
 		localStorage.get().Close()
 	}
-	localStorage.Set(inProcStorage.DB, startTimeMargin)
+	localStorage.Set(inProcStorage.DB, 0)
 }
 
-func loadDataFromFile() (error, *teststorage.TestStorage) {
-	filename := "c:\\d\\input_series.yml"
-	b, err := ioutil.ReadFile(filename)
+func loadDataFromFile(filePath string) (error, *teststorage.TestStorage) {
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Sample data file %q does not exist", filePath))
+		os.Exit(2)
+	}
+	b, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return err, nil
 	}
