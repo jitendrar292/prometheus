@@ -718,11 +718,19 @@ func main() {
 				go func() {
 					for {
 						select {
-						case <-watcher.Events:
-							if lastUpdate.IsZero() || time.Now().Sub(lastUpdate) > 1*time.Second {
+						case event := <-watcher.Events:
+							fmt.Fprintf(os.Stderr, "Received event %v\n", event)
+							if event.Op == fsnotify.Write && (lastUpdate.IsZero() || time.Now().Sub(lastUpdate) > 1*time.Second) {
 								lastUpdate = time.Now()
-								fmt.Printf("File updated %s\n", cfg.sampleFile)
+								fmt.Printf("Reloaded sample file %s\n", cfg.sampleFile)
 								initLocalStorage(cfg.sampleFile, localStorage)
+							}
+							// We need this to handle how some editors save backups and recreate the file.
+							if event.Op != fsnotify.Rename && event.Op != fsnotify.Remove {
+								watcher.Remove(cfg.sampleFile)
+								if err := watcher.Add(cfg.sampleFile); err != nil {
+									fmt.Println("ERROR", err)
+								}
 							}
 						case err := <-watcher.Errors:
 							fmt.Println("ERROR", err)
