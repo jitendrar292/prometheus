@@ -27,7 +27,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/pkg/errors"
-	yaml "gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v2"
 
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/promql"
@@ -99,6 +99,11 @@ func ruleUnitTest(filename string) []error {
 	// Testing.
 	var errs []error
 	for _, t := range unitTestInp.Tests {
+		err := t.loadSeriesDataFromFile(filepath.Dir(filename))
+		if err != nil {
+			errs = append(errs, err)
+		}
+
 		ers := t.test(mint, maxt, unitTestInp.EvaluationInterval, groupOrderMap,
 			unitTestInp.RuleFiles...)
 		if ers != nil {
@@ -159,9 +164,41 @@ func resolveAndGlobFilepaths(baseDir string, utf *unitTestFile) error {
 type testGroup struct {
 	Interval        time.Duration    `yaml:"interval"`
 	InputSeries     []series         `yaml:"input_series"`
+	SeriesDataFile  string           `yaml:"series_data_file,omitempty"`
 	AlertRuleTests  []alertTestCase  `yaml:"alert_rule_test,omitempty"`
 	PromqlExprTests []promqlTestCase `yaml:"promql_expr_test,omitempty"`
 	ExternalLabels  labels.Labels    `yaml:"external_labels,omitempty"`
+}
+
+type seriesData struct {
+	Interval    time.Duration `yaml:"interval"`
+	InputSeries []series      `yaml:"input_series"`
+}
+
+func (tg *testGroup) loadSeriesDataFromFile(basePath string) error {
+	if tg.SeriesDataFile == "" {
+		return nil
+	}
+	if !filepath.IsAbs(tg.SeriesDataFile) {
+		tg.SeriesDataFile = filepath.Clean(filepath.Join(basePath, tg.SeriesDataFile))
+	}
+	if _, err := os.Stat(tg.SeriesDataFile); os.IsNotExist(err) {
+		return errors.Wrapf(err, "Sample data file %q does not exist", tg.SeriesDataFile)
+	}
+	filepath.Dir(tg.SeriesDataFile)
+	b, err := ioutil.ReadFile(tg.SeriesDataFile)
+	if err != nil {
+		return err
+	}
+
+	var seriesData seriesData
+	if err := yaml.UnmarshalStrict(b, &seriesData); err != nil {
+		return err
+	}
+
+	tg.Interval = seriesData.Interval
+	tg.InputSeries = seriesData.InputSeries
+	return nil
 }
 
 // test performs the unit tests.
