@@ -565,5 +565,5 @@ func parsedSamplesString(pss []parsedSample) string {
 }
 
 func (ps *parsedSample) String() string {
-	return "- labels: \"" + ps.Labels.String() + "\"\n  value: " + strconv.FormatFloat(ps.Value, 'f', -1, 64)
+	return "- labels: \"" + ps.Labels.String() + "\"\n  value: " + strconv.FormatFloat(ps.Value, 'f', -1, 64) + "\n"
 }

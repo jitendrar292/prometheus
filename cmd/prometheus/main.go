@@ -702,7 +702,6 @@ func main() {
 		)
 	}
 	var watcher *fsnotify.Watcher
-	var lastUpdate time.Time
 	stopWatcher := make(chan bool)
 	{
 		g.Add(
@@ -720,8 +719,7 @@ func main() {
 						select {
 						case event := <-watcher.Events:
 							fmt.Fprintf(os.Stderr, "Received event %v\n", event)
-							if event.Op == fsnotify.Write && (lastUpdate.IsZero() || time.Now().Sub(lastUpdate) > 1*time.Second) {
-								lastUpdate = time.Now()
+							if event.Op == fsnotify.Write {
 								fmt.Printf("Reloaded sample file %s\n", cfg.sampleFile)
 								initLocalStorage(cfg.sampleFile, localStorage)
 							}
