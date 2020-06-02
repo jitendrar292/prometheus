@@ -63,6 +63,21 @@ func (ls Labels) String() string {
 	return b.String()
 }
 
+func (ls Labels) YamlString() string {
+	var b bytes.Buffer
+
+	for i, l := range ls {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(l.Name)
+		b.WriteByte(':')
+		b.WriteByte(' ')
+		b.WriteString(strconv.Quote(l.Value))
+	}
+	return b.String()
+}
+
 // Bytes returns ls as a byte slice.
 // It uses an byte invalid character as a separator and so should not be used for printing.
 func (ls Labels) Bytes(buf []byte) []byte {

@@ -339,14 +339,18 @@ func (tg *testGroup) test(mint, maxt time.Time, evalInterval time.Duration, grou
 				}
 
 				if gotAlerts.Len() != expAlerts.Len() {
-					errs = append(errs, errors.Errorf("    alertname:%s, time:%s, \n        exp:%#v, \n        got:%#v",
+					errs = append(errs, errors.Errorf("    Alert Name:%s, time:%s, \n\n"+
+						"## Expected ##\n%s\n\n"+
+						"## Actual ##\n%s",
 						testcase.Alertname, testcase.EvalTime.String(), expAlerts.String(), gotAlerts.String()))
 				} else {
 					sort.Sort(gotAlerts)
 					sort.Sort(expAlerts)
 
 					if !reflect.DeepEqual(expAlerts, gotAlerts) {
-						errs = append(errs, errors.Errorf("    alertname:%s, time:%s, \n        exp:%#v, \n        got:%#v",
+						errs = append(errs, errors.Errorf("    Alert Name:%s, time:%s, \n\n"+
+							"## Expected ##\n%s\n\n"+
+							"## Actual ##\n%s",
 							testcase.Alertname, testcase.EvalTime.String(), expAlerts.String(), gotAlerts.String()))
 					}
 				}
@@ -380,7 +384,7 @@ Outer:
 			lb, err := parser.ParseMetric(s.Labels)
 			if err != nil {
 				err = errors.Wrapf(err, "labels %q", s.Labels)
-				errs = append(errs, errors.Errorf("    expr: %q, time: %s, err: %s", testCase.Expr,
+				errs = append(errs, errors.Errorf("    Expr: %q, time: %s, err: %s", testCase.Expr,
 					testCase.EvalTime.String(), err.Error()))
 				continue Outer
 			}
@@ -397,7 +401,9 @@ Outer:
 			return labels.Compare(gotSamples[i].Labels, gotSamples[j].Labels) <= 0
 		})
 		if !reflect.DeepEqual(expSamples, gotSamples) {
-			errs = append(errs, errors.Errorf("    expr: %q, time: %s,\n        exp:%#v\n        got:%#v", testCase.Expr,
+			errs = append(errs, errors.Errorf("    Expr: %q, time: %s,\n\n"+
+				"## Expected ##\n%s\n\n"+
+				"## Actual ##\n%s", testCase.Expr,
 				testCase.EvalTime.String(), parsedSamplesString(expSamples), parsedSamplesString(gotSamples)))
 		}
 	}
@@ -511,7 +517,7 @@ type labelAndAnnotation struct {
 }
 
 func (la *labelAndAnnotation) String() string {
-	return "Labels:" + la.Labels.String() + " Annotations:" + la.Annotations.String()
+	return "Labels:\n" + la.Labels.YamlString() + "\n\nAnnotations:\n" + la.Annotations.YamlString()
 }
 
 type series struct {
@@ -559,5 +565,5 @@ func parsedSamplesString(pss []parsedSample) string {
 }
 
 func (ps *parsedSample) String() string {
-	return ps.Labels.String() + " " + strconv.FormatFloat(ps.Value, 'E', -1, 64)
+	return "- labels: \"" + ps.Labels.String() + "\"\n  value: " + strconv.FormatFloat(ps.Value, 'f', -1, 64)
 }
