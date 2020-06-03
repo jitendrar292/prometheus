@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -400,7 +401,8 @@ Outer:
 		sort.Slice(gotSamples, func(i, j int) bool {
 			return labels.Compare(gotSamples[i].Labels, gotSamples[j].Labels) <= 0
 		})
-		if !reflect.DeepEqual(expSamples, gotSamples) {
+
+		if !tg.expectedMatchesActual(expSamples, gotSamples) {
 			errs = append(errs, errors.Errorf("    Expr: %q, time: %s,\n\n"+
 				"## Expected ##\n%s\n\n"+
 				"## Actual ##\n%s", testCase.Expr,
@@ -412,6 +414,31 @@ Outer:
 		return errs
 	}
 	return nil
+}
+
+func (tg *testGroup) expectedMatchesActual(expectedSamples []parsedSample, actualSamples []parsedSample) bool {
+	if len(expectedSamples) != len(actualSamples) {
+		return false
+	}
+	for i := range expectedSamples {
+		expectedLabels := expectedSamples[i].Labels
+		actualLabels := actualSamples[i].Labels
+		if expectedLabels.String() != actualLabels.String() {
+			return false
+		}
+
+		if !tg.almostEqual(expectedSamples[i].Value, actualSamples[i].Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func (tg *testGroup) almostEqual(x, y float64) bool {
+	if x == y {
+		return true
+	}
+	return math.Nextafter(x, y) == y
 }
 
 // seriesLoadingString returns the input series in PromQL notation.
