@@ -586,7 +586,7 @@ func parsedSamplesString(pss []parsedSample) string {
 	}
 	s := pss[0].String()
 	for _, ps := range pss[1:] {
-		s += ", " + ps.String()
+		s += ps.String()
 	}
 	return s
 }
