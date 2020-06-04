@@ -438,7 +438,15 @@ func (tg *testGroup) almostEqual(x, y float64) bool {
 	if x == y {
 		return true
 	}
-	return math.Nextafter(x, y) == y
+	almostEqual := math.Nextafter(x, y) == y
+	if !almostEqual {
+		// Fallback on an epsilon check to see if the diff is minor
+		if math.Abs(x-y) < 1e-10 {
+			return true
+		}
+	}
+
+	return almostEqual
 }
 
 // seriesLoadingString returns the input series in PromQL notation.
